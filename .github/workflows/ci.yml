@@ -1,0 +1,63 @@
+name: 🛡️ DevSecure CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name:  Build Docker image (Alpine)
+      run: docker build -t devsecure-api .
+      
+    - name: Trivy - Scan de vulnérabilités
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'devsecure-api'
+        format: 'template'
+        template: '@/contrib/sarif.tpl'
+        output: 'trivy-results.sarif'
+        
+    - name:  Trivy - Rapport HTML
+      run: |
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy image --format template --template "@/contrib/html.tpl" -o trivy-report.html devsecure-api
+    
+    - name: Upload rapport de sécurité
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          trivy-report.html
+          trivy-results.sarif
+    
+    - name: GitLeaks - Scan des secrets
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Test Docker build
+      run: |
+        docker build -t devsecure-api-test .
+        
+    - name: Test Docker run
+      run: |
+        docker run -d --name test-container -p 3001:3000 devsecure-api-test
+        sleep 5
+        curl -f http://localhost:3001/ || exit 1
+        docker stop test-container
